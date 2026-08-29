@@ -1,0 +1,39 @@
+[package]
+name = "torrent-vlc"
+version = "0.1.0"
+edition = "2024"
+description = "Stream authorized BitTorrent media sessions into VLC with temporary storage"
+license = "MIT"
+repository = "https://github.com/margadev66-oss/torrent-vlc"
+
+[dependencies]
+anyhow = "1.0"
+async-stream = "0.3"
+axum = "0.8"
+bytes = "1.10"
+clap = { version = "4.5", features = ["derive"] }
+directories = "6.0"
+fs2 = "0.4"
+futures-util = "0.3"
+librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
+libc = "0.2"
+mime_guess = "2.0"
+rand = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.20"
+thiserror = "2.0"
+tokio = { version = "1.44", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2.5"
+uuid = { version = "1.16", features = ["v4", "serde"] }
+
+[dev-dependencies]
+assert_matches = "1.5"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
