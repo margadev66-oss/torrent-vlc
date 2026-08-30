@@ -19,8 +19,8 @@ pub struct Cli {
     #[arg(long, value_name = "INDEX_OR_NAME")]
     pub file: Option<String>,
 
-    /// Data to prefetch before VLC starts, for example 64M or 128MiB.
-    #[arg(long, default_value = "64M", value_name = "SIZE")]
+    /// Data to prefetch before VLC starts, for example 16MiB or 64MiB.
+    #[arg(long, default_value = "16MiB", value_name = "SIZE")]
     pub startup_buffer: String,
 
     /// Hard limit for materialized torrent pieces, for example 8G or 512MiB.
@@ -54,6 +54,39 @@ pub struct Cli {
     /// Maximum time a missing piece read may remain stalled.
     #[arg(long, default_value = "120s", value_name = "DURATION")]
     pub stall_timeout: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn torrent_path() -> (tempfile::TempDir, String) {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("fixture.torrent");
+        fs::write(&path, b"fixture").unwrap();
+        (directory, path.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn fast_startup_buffer_is_the_default() {
+        let (_directory, path) = torrent_path();
+        let cli = Cli::try_parse_from(["torrent-vlc", &path]).unwrap();
+        let config = cli.into_config().unwrap();
+
+        assert_eq!(config.startup_buffer, 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn startup_buffer_can_still_be_overridden() {
+        let (_directory, path) = torrent_path();
+        let cli = Cli::try_parse_from(["torrent-vlc", &path, "--startup-buffer", "64MiB"]).unwrap();
+        let config = cli.into_config().unwrap();
+
+        assert_eq!(config.startup_buffer, 64 * 1024 * 1024);
+    }
 }
 
 #[derive(Debug, Clone)]

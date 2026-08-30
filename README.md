@@ -31,7 +31,7 @@ seeking, audio, subtitles, and hardware decoding to VLC.
 
 ```text
 --file <INDEX_OR_NAME>       Select a displayed 1-based index or exact path
---startup-buffer <SIZE>      Initial prefetch; default 64M
+--startup-buffer <SIZE>      Initial prefetch; default 16MiB
 --cache-limit <SIZE>         Hard limit for materialized torrent pieces
 --vlc-path <PATH>            VLC executable override
 --keep                       Preserve downloaded data after normal exit

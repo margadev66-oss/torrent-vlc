@@ -9,21 +9,13 @@ use librqbit::{
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::{sleep, timeout};
-
-const PEER_DISCOVERY_WAIT: Duration = Duration::from_secs(5);
+use tokio::time::timeout;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PeerCounts {
     pub connected: u32,
     pub discovered: u32,
     pub connecting: u32,
-}
-
-impl PeerCounts {
-    fn has_discovered_peer(self) -> bool {
-        self.discovered > 0
-    }
 }
 
 pub struct TorrentEngine {
@@ -127,20 +119,6 @@ impl TorrentEngine {
             .context("torrent failed during initialization")?;
         self.handle = Some(handle.clone());
         Ok(handle)
-    }
-
-    pub async fn wait_for_peer_discovery(handle: &ManagedTorrent) -> PeerCounts {
-        let _ = timeout(PEER_DISCOVERY_WAIT, async {
-            loop {
-                if peer_counts(handle).has_discovered_peer() {
-                    break;
-                }
-                sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await;
-
-        peer_counts(handle)
     }
 
     pub async fn stop(&mut self) {

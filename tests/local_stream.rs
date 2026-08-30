@@ -8,6 +8,7 @@ use std::fs;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use tempfile::tempdir;
+use torrent_vlc::stream::prefetch::prefetch;
 use torrent_vlc::stream::server::StreamServer;
 use torrent_vlc::torrent::layout::{TorrentFile, TorrentLayout};
 
@@ -113,6 +114,16 @@ async fn localhost_range_stream_matches_a_locally_seeded_torrent() -> Result<()>
         )
     })?;
     assert_eq!(selected.torrent_offset, prefix.len() as u64);
+
+    let startup_bytes = prefetch(
+        client_handle.clone(),
+        &selected,
+        &layout,
+        2_500,
+        Duration::from_secs(10),
+    )
+    .await?;
+    assert_eq!(startup_bytes, 2_500);
 
     let mut server =
         StreamServer::start(client_handle, selected, layout, Duration::from_secs(10)).await?;

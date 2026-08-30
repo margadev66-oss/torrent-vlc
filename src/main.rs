@@ -146,9 +146,6 @@ impl RuntimeSession {
                 config.cache_limit,
             )
             .await?;
-        let mut discovery_display = PeerStatusDisplay::start(handle.clone());
-        TorrentEngine::wait_for_peer_discovery(handle.as_ref()).await;
-        discovery_display.finish(peer_counts(handle.as_ref())).await;
         println!("Streaming {selected_name}");
         println!("Preparing stream...");
 
@@ -166,6 +163,7 @@ impl RuntimeSession {
         let prefetch_result = prefetch(
             handle,
             &selected,
+            &metadata.layout,
             config.startup_buffer,
             config.stall_timeout,
         )
