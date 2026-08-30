@@ -5,9 +5,14 @@ use fs2::FileExt;
 use recovery::{SessionMetadata, now_unix_seconds};
 use serde_json::to_vec_pretty;
 use std::fs::{self, File, OpenOptions};
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::task::spawn_blocking;
 use uuid::Uuid;
+
+const CLEANUP_ATTEMPTS: usize = 6;
+const CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 pub struct SessionGuard {
     path: Option<PathBuf>,
@@ -54,7 +59,7 @@ impl SessionGuard {
             })
         })();
         if result.is_err() {
-            let _ = fs::remove_dir_all(cleanup_path);
+            let _ = remove_dir_all_with_retries(&cleanup_path);
         }
         result
     }
@@ -96,7 +101,7 @@ impl SessionGuard {
         };
         self.release_lock();
         let cleanup_path = path.clone();
-        let result = spawn_blocking(move || fs::remove_dir_all(&cleanup_path))
+        let result = spawn_blocking(move || remove_dir_all_with_retries(&cleanup_path))
             .await
             .context("session cleanup task failed")?;
         result.with_context(|| format!("unable to delete temporary session {}", path.display()))?;
@@ -133,7 +138,7 @@ impl Drop for SessionGuard {
         // This is only a best-effort fallback for unwinding after an explicit
         // cleanup failed. The async shutdown path performs the same operation
         // without blocking the runtime.
-        let _ = fs::remove_dir_all(path);
+        let _ = remove_dir_all_with_retries(&path);
     }
 }
 
@@ -156,16 +161,75 @@ fn preserve_data_sync(path: &Path, output_root: &Path, name: &str) -> Result<Pat
     }
     let safe_name = sanitize_name(name);
     let destination = unique_destination(output_root, &safe_name)?;
-    fs::rename(&data_path, &destination).with_context(|| {
+    move_directory(&data_path, &destination).with_context(|| {
         format!(
             "unable to move preserved media from {} to {}",
             data_path.display(),
             destination.display()
         )
     })?;
-    fs::remove_dir_all(path)
+    remove_dir_all_with_retries(path)
         .with_context(|| format!("unable to remove session metadata {}", path.display()))?;
     Ok(destination)
+}
+
+fn move_directory(source: &Path, destination: &Path) -> Result<()> {
+    match fs::rename(source, destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::CrossesDevices => {
+            if let Err(copy_error) = copy_directory(source, destination) {
+                let _ = remove_dir_all_with_retries(destination);
+                return Err(copy_error).context("unable to copy preserved media across volumes");
+            }
+            remove_dir_all_with_retries(source)
+                .context("unable to remove the temporary media after copying")?;
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn copy_directory(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::create_dir(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_directory(&source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            fs::copy(source_path, destination_path)?;
+        } else {
+            return Err(io::Error::new(
+                ErrorKind::Unsupported,
+                "preserved media contains an unsupported filesystem entry",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn remove_dir_all_with_retries(path: &Path) -> io::Result<()> {
+    for attempt in 0..CLEANUP_ATTEMPTS {
+        match fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error)
+                if attempt + 1 < CLEANUP_ATTEMPTS
+                    && matches!(
+                        error.kind(),
+                        ErrorKind::Interrupted
+                            | ErrorKind::PermissionDenied
+                            | ErrorKind::DirectoryNotEmpty
+                    ) =>
+            {
+                std::thread::sleep(CLEANUP_RETRY_DELAY.saturating_mul(2u32.pow(attempt as u32)));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn unique_destination(root: &Path, name: &str) -> Result<PathBuf> {
@@ -196,7 +260,25 @@ pub fn sanitize_name(value: &str) -> String {
             result.push('_');
         }
     }
-    result.trim_matches(['.', '_', '-']).to_string()
+    let result = result.trim_matches(['.', '_', '-']).to_string();
+    if is_windows_reserved_name(&result) {
+        format!("_{result}")
+    } else {
+        result
+    }
+}
+
+fn is_windows_reserved_name(value: &str) -> bool {
+    let stem = value.split('.').next().unwrap_or_default();
+    let upper = stem.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    if upper.len() != 4 {
+        return false;
+    }
+    let bytes = upper.as_bytes();
+    (bytes.starts_with(b"COM") || bytes.starts_with(b"LPT")) && (b'1'..=b'9').contains(&bytes[3])
 }
 
 #[cfg(test)]
@@ -227,5 +309,12 @@ mod tests {
             fs::read_dir(root.path().join("sessions")).unwrap().count(),
             0
         );
+    }
+
+    #[test]
+    fn sanitizes_windows_reserved_device_names() {
+        assert_eq!(sanitize_name("CON.txt"), "_CON.txt");
+        assert_eq!(sanitize_name("lpt9"), "_lpt9");
+        assert_eq!(sanitize_name("episode.mkv"), "episode.mkv");
     }
 }

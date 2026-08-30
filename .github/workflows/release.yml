@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - platform: windows-x86_64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - platform: macos-x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - platform: macos-aarch64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Set macOS deployment target
+        if: startsWith(matrix.runner, 'macos-')
+        shell: bash
+        run: echo 'MACOSX_DEPLOYMENT_TARGET=11.0' >> "$GITHUB_ENV"
+
+      - name: Validate release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          test "$package_version" = "$tag_version"
+
+      - name: Build tagged release
+        run: cargo build --release --target "${{ matrix.target }}"
+
+      - name: Smoke-test tagged CLI
+        run: cargo run --release --target "${{ matrix.target }}" -- --version
+
+      - name: Package Unix archive
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          artifact_name="torrent-vlc-${version}-${{ matrix.platform }}"
+          package_dir="dist/${artifact_name}"
+          mkdir -p "$package_dir"
+          cp "target/${{ matrix.target }}/release/torrent-vlc" "$package_dir/torrent-vlc"
+          cp README.md "$package_dir/README.md"
+          tar -C dist -czf "dist/${artifact_name}.tar.gz" "$artifact_name"
+          rm -rf "$package_dir"
+
+      - name: Package Windows archive
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          if (-not $env:GITHUB_REF_NAME.StartsWith('v')) {
+            throw 'Release tag must start with v'
+          }
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $artifactName = "torrent-vlc-$version-${{ matrix.platform }}"
+          $packageDir = Join-Path 'dist' $artifactName
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item 'target\x86_64-pc-windows-msvc\release\torrent-vlc.exe' (Join-Path $packageDir 'torrent-vlc.exe')
+          Copy-Item 'README.md' (Join-Path $packageDir 'README.md')
+          Compress-Archive -Path $packageDir -DestinationPath (Join-Path 'dist' "$artifactName.zip")
+          Remove-Item -Recurse -Force $packageDir
+
+      - name: Validate package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$(find dist -maxdepth 1 -type f -print -quit)"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "torrent-vlc $tag" \
+              --notes "Unsigned native archives for Linux x86_64, Windows x86_64, macOS Intel, and macOS Apple Silicon. VLC must be installed separately."
+          fi

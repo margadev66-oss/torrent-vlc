@@ -27,7 +27,7 @@ pub struct Cli {
     #[arg(long, value_name = "SIZE")]
     pub cache_limit: Option<String>,
 
-    /// VLC executable path. Defaults to looking up `vlc` on Linux.
+    /// VLC executable path. Defaults to PATH and platform-standard install locations.
     #[arg(long, value_name = "PATH")]
     pub vlc_path: Option<PathBuf>,
 

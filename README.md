@@ -1,7 +1,7 @@
 # torrent-vlc
 
-`torrent-vlc` is a small Linux-first command-line client for streaming a media
-file from an authorized BitTorrent torrent into VLC. VLC remains the media
+`torrent-vlc` is a small cross-platform command-line client for streaming a
+media file from an authorized BitTorrent torrent into VLC. VLC remains the media
 player; this program only resolves and downloads torrent pieces, serves a
 localhost byte-range stream, launches VLC, and cleans up the temporary session.
 
@@ -10,8 +10,15 @@ search, index, scrape, discover, or integrate with media providers.
 
 ## Requirements
 
-- Rust stable (1.98 or newer is recommended for the current lockfile)
-- VLC available as `vlc`, or an explicit `--vlc-path`
+- VLC installed separately.
+- Rust stable (1.98 or newer is recommended for development builds).
+
+VLC discovery checks PATH and standard installation locations for Linux,
+Windows, and macOS. Use `--vlc-path` to select a custom executable.
+
+The v0.1.1 release provides unsigned native archives for Linux x86_64,
+Windows x86_64, macOS Intel, and macOS Apple Silicon. Windows SmartScreen or
+macOS Gatekeeper may require an explicit confirmation for an unsigned binary.
 
 ## Run
 
@@ -21,6 +28,10 @@ cargo run --release -- --help
 cargo run --release -- "magnet:?xt=urn:btih:..."
 cargo run --release -- example.torrent --startup-buffer 128M
 ```
+
+For a released binary, download the archive matching the operating system and
+architecture from the [v0.1.1 release](https://github.com/margadev66-oss/torrent-vlc/releases/tag/v0.1.1),
+extract it, and run `torrent-vlc` (or `torrent-vlc.exe` on Windows).
 
 The program lists playable video files when a torrent contains more than one.
 Select one interactively, or use `--file 2` or `--file 'path/in/torrent.mkv'`.

@@ -17,6 +17,7 @@ use torrent_vlc::torrent::engine::{PeerCounts, TorrentEngine, peer_counts};
 use tracing_subscriber::EnvFilter;
 
 const PEER_STATUS_REFRESH: Duration = Duration::from_millis(500);
+const PEER_STATUS_LINE_WIDTH: usize = 80;
 
 struct PeerStatusDisplay {
     task: Option<JoinHandle<()>>,
@@ -67,17 +68,17 @@ impl PeerStatusDisplay {
 
 fn render_peer_status(counts: PeerCounts) {
     let mut stdout = io::stdout().lock();
-    let _ = write!(
-        stdout,
-        "\r\x1b[2KPeers: {} discovered, {} connected",
+    let line = format!(
+        "Peers: {} discovered, {} connected",
         counts.discovered, counts.connected
     );
+    let _ = write!(stdout, "\r{line:<width$}", width = PEER_STATUS_LINE_WIDTH);
     let _ = stdout.flush();
 }
 
 fn clear_status_line() {
     let mut stdout = io::stdout().lock();
-    let _ = write!(stdout, "\r\x1b[2K");
+    let _ = write!(stdout, "\r{:width$}\r", "", width = PEER_STATUS_LINE_WIDTH);
     let _ = stdout.flush();
 }
 
@@ -287,7 +288,9 @@ async fn run() -> Result<()> {
     let cli = Cli::parse();
     let config = cli.into_config()?;
     init_logging(config.verbose);
-    validate_vlc_path(config.vlc_path.as_deref())?;
+    if !config.no_launch {
+        validate_vlc_path(config.vlc_path.as_deref())?;
+    }
 
     let cache_root = default_cache_root();
     let sessions_root = cache_root.join("sessions");

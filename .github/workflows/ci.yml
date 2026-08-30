@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup component add rustfmt clippy --toolchain stable
+          rustup default stable
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run tests
+        run: cargo test --all-targets
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  native:
+    name: Native ${{ matrix.platform }}
+    needs: checks
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+          - platform: windows-x86_64
+            runner: windows-2022
+          - platform: macos-x86_64
+            runner: macos-15-intel
+          - platform: macos-aarch64
+            runner: macos-14
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Set macOS deployment target
+        if: startsWith(matrix.runner, 'macos-')
+        shell: bash
+        run: echo 'MACOSX_DEPLOYMENT_TARGET=11.0' >> "$GITHUB_ENV"
+
+      - name: Run native tests
+        run: cargo test --all-targets
+
+      - name: Build native release
+        run: cargo build --release
+
+      - name: Smoke-test CLI metadata
+        run: |
+          cargo run --release -- --version
+          cargo run --release -- --help

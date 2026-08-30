@@ -96,11 +96,44 @@ pub fn process_is_alive(pid: u32) -> bool {
         }
         std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = pid;
-        false
+        process_is_alive_windows(pid)
     }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // The session lock still prevents deleting a live session, but an
+        // unknown process state must never be treated as proof of death.
+        true
+    }
+}
+
+#[cfg(windows)]
+fn process_is_alive_windows(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_ACCESS_DENIED, GetLastError, STILL_ACTIVE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        // Access restrictions prevent us from proving that the process is
+        // gone, so leave the session for a later conservative recovery pass.
+        return unsafe { GetLastError() == ERROR_ACCESS_DENIED };
+    }
+
+    let mut exit_code = 0u32;
+    let alive = if unsafe { GetExitCodeProcess(handle, &mut exit_code) } != 0 {
+        exit_code == STILL_ACTIVE as u32
+    } else {
+        true
+    };
+    unsafe {
+        CloseHandle(handle);
+    }
+    alive
 }
 
 #[cfg(test)]
@@ -128,6 +161,11 @@ mod tests {
         fs::write(session.join("session.lock"), b"").unwrap();
         assert!(recover_stale_sessions(root.path()).unwrap().is_empty());
         assert!(session.exists());
+    }
+
+    #[test]
+    fn recognizes_the_current_process() {
+        assert!(process_is_alive(std::process::id()));
     }
 
     #[test]
