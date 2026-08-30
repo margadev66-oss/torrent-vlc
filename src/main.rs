@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Child;
 use tokio::task::JoinHandle;
-use torrent_vlc::cli::{Cli, Config};
-use torrent_vlc::file_select::{playable_files, select_file};
+use torrent_vlc::cli::{Cli, Config, Source};
+use torrent_vlc::file_select::{is_playable_path, playable_files, select_file, select_file_id};
 use torrent_vlc::player::vlc::{launch, terminate, validate_vlc_path};
 use torrent_vlc::session::recovery::{default_cache_root, recover_stale_sessions};
 use torrent_vlc::session::{SessionGuard, sanitize_name};
@@ -126,7 +126,11 @@ impl RuntimeSession {
         println!("\nTorrent metadata loaded.");
 
         let candidates = playable_files(&metadata.layout.files);
-        let selected = select_file(&candidates, config.file_selector.as_deref())?;
+        let selected = if let Some(file_id) = config.file_id {
+            select_file_id(&candidates, file_id)?
+        } else {
+            select_file(&candidates, config.file_selector.as_deref())?
+        };
         let selected_name = selected.path.clone();
         let selection = serde_json::json!({
             "file_id": selected.file_id,
@@ -144,6 +148,7 @@ impl RuntimeSession {
                 metadata.torrent_bytes.clone(),
                 &guard.data_path(),
                 selected.file_id,
+                &metadata.initial_peers,
                 config.cache_limit,
             )
             .await?;
@@ -167,6 +172,7 @@ impl RuntimeSession {
             &metadata.layout,
             config.startup_buffer,
             config.stall_timeout,
+            config.startup_timeout,
         )
         .await;
         buffer_display
@@ -276,6 +282,117 @@ impl RuntimeSession {
     }
 }
 
+#[derive(Debug, Parser)]
+#[command(
+    name = "torrent-vlc inspect",
+    about = "Inspect authorized torrent metadata as JSON"
+)]
+struct InspectCli {
+    /// A magnet URI or a local .torrent file.
+    #[arg(value_name = "SOURCE")]
+    source: String,
+
+    /// Accepted for explicit machine-readable invocation; inspect is always JSON.
+    #[arg(long)]
+    json: bool,
+
+    /// Maximum time to wait for magnet metadata.
+    #[arg(long, default_value = "120s", value_name = "DURATION")]
+    metadata_timeout: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InspectOutput {
+    torrent_name: String,
+    info_hash: String,
+    total_size: u64,
+    files: Vec<InspectFile>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InspectFile {
+    index: usize,
+    name: String,
+    size: u64,
+    playable: bool,
+    padding: bool,
+    playable_ordinal: Option<usize>,
+}
+
+async fn inspect(cli: InspectCli) -> Result<()> {
+    let source = parse_inspect_source(&cli.source)?;
+    let metadata_timeout = torrent_vlc::size::parse_duration(&cli.metadata_timeout)
+        .context("invalid --metadata-timeout")?;
+    let cache_root = default_cache_root();
+    let sessions_root = cache_root.join("sessions");
+    let mut runtime = RuntimeSession::create(&sessions_root).await?;
+    let result = async {
+        let guard = runtime.guard.as_ref().context("session guard is missing")?;
+        let engine = runtime
+            .engine
+            .as_ref()
+            .context("torrent engine is missing")?;
+        let metadata = engine
+            .resolve_metadata(&source, &guard.data_path(), metadata_timeout)
+            .await?;
+        let playable_ids = playable_files(&metadata.layout.files)
+            .into_iter()
+            .enumerate()
+            .map(|(index, file)| (file.file_id, index + 1))
+            .collect::<std::collections::HashMap<usize, usize>>();
+        let files = metadata
+            .layout
+            .files
+            .iter()
+            .map(|file| InspectFile {
+                index: file.file_id,
+                name: file.path.clone(),
+                size: file.length,
+                playable: !file.padding && file.length > 0 && is_playable_path(&file.path),
+                padding: file.padding,
+                playable_ordinal: playable_ids.get(&file.file_id).copied(),
+            })
+            .collect::<Vec<_>>();
+        let output = InspectOutput {
+            torrent_name: metadata.torrent_name,
+            info_hash: metadata.info_hash,
+            total_size: metadata.layout.total_length,
+            files,
+        };
+        Ok::<_, anyhow::Error>(serde_json::to_string_pretty(&output)?)
+    }
+    .await;
+    let cleanup = runtime.shutdown(false, None).await;
+    let json = result?;
+    cleanup?;
+    println!("{json}");
+    Ok(())
+}
+
+fn parse_inspect_source(source: &str) -> Result<Source> {
+    if source.starts_with("magnet:") {
+        let parsed = url::Url::parse(source).context("invalid magnet URI")?;
+        if parsed.scheme() != "magnet" || !parsed.query_pairs().any(|(key, _)| key == "xt") {
+            bail!("magnet URI must contain an xt parameter");
+        }
+        return Ok(Source::Magnet(source.to_string()));
+    }
+    let path = PathBuf::from(source);
+    if !path.is_file()
+        || !path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent"))
+    {
+        bail!(
+            "source must be a magnet URI or a .torrent file: {}",
+            path.display()
+        );
+    }
+    Ok(Source::TorrentFile(path))
+}
+
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
@@ -285,6 +402,15 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
+    let mut arguments = std::env::args();
+    let _program = arguments.next();
+    if arguments.next().as_deref() == Some("inspect") {
+        let mut inspect_arguments = vec!["torrent-vlc inspect".to_string()];
+        inspect_arguments.extend(arguments);
+        let cli = InspectCli::parse_from(inspect_arguments);
+        init_logging(false);
+        return inspect(cli).await;
+    }
     let cli = Cli::parse();
     let config = cli.into_config()?;
     init_logging(config.verbose);

@@ -19,6 +19,10 @@ pub struct Cli {
     #[arg(long, value_name = "INDEX_OR_NAME")]
     pub file: Option<String>,
 
+    /// Select the raw torrent file ID returned by `torrent-vlc inspect`.
+    #[arg(long, value_name = "FILE_ID", conflicts_with = "file")]
+    pub file_id: Option<usize>,
+
     /// Data to prefetch before VLC starts, for example 16MiB or 64MiB.
     #[arg(long, default_value = "16MiB", value_name = "SIZE")]
     pub startup_buffer: String,
@@ -54,6 +58,10 @@ pub struct Cli {
     /// Maximum time a missing piece read may remain stalled.
     #[arg(long, default_value = "120s", value_name = "DURATION")]
     pub stall_timeout: String,
+
+    /// Maximum total time to wait for the startup buffer.
+    #[arg(long, default_value = "10m", value_name = "DURATION")]
+    pub startup_timeout: String,
 }
 
 #[cfg(test)]
@@ -77,6 +85,7 @@ mod tests {
         let config = cli.into_config().unwrap();
 
         assert_eq!(config.startup_buffer, 16 * 1024 * 1024);
+        assert_eq!(config.startup_timeout, Duration::from_secs(10 * 60));
     }
 
     #[test]
@@ -86,6 +95,15 @@ mod tests {
         let config = cli.into_config().unwrap();
 
         assert_eq!(config.startup_buffer, 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn startup_timeout_can_be_overridden() {
+        let (_directory, path) = torrent_path();
+        let cli = Cli::try_parse_from(["torrent-vlc", &path, "--startup-timeout", "45s"]).unwrap();
+        let config = cli.into_config().unwrap();
+
+        assert_eq!(config.startup_timeout, Duration::from_secs(45));
     }
 }
 
@@ -99,6 +117,7 @@ pub enum Source {
 pub struct Config {
     pub source: Source,
     pub file_selector: Option<String>,
+    pub file_id: Option<usize>,
     pub startup_buffer: u64,
     pub cache_limit: Option<u64>,
     pub vlc_path: Option<PathBuf>,
@@ -108,6 +127,7 @@ pub struct Config {
     pub no_launch: bool,
     pub metadata_timeout: Duration,
     pub stall_timeout: Duration,
+    pub startup_timeout: Duration,
 }
 
 impl Cli {
@@ -153,6 +173,7 @@ impl Cli {
         Ok(Config {
             source,
             file_selector: self.file,
+            file_id: self.file_id,
             startup_buffer: parse_byte_size(&self.startup_buffer)
                 .context("invalid --startup-buffer")?,
             cache_limit: self
@@ -170,6 +191,8 @@ impl Cli {
                 .context("invalid --metadata-timeout")?,
             stall_timeout: parse_duration(&self.stall_timeout)
                 .context("invalid --stall-timeout")?,
+            startup_timeout: parse_duration(&self.startup_timeout)
+                .context("invalid --startup-timeout")?,
         })
     }
 }

@@ -121,6 +121,7 @@ async fn localhost_range_stream_matches_a_locally_seeded_torrent() -> Result<()>
         &layout,
         2_500,
         Duration::from_secs(10),
+        Duration::from_secs(30),
     )
     .await?;
     assert_eq!(startup_bytes, 2_500);

@@ -51,13 +51,16 @@ seeking, audio, subtitles, and hardware decoding to VLC.
 --no-launch                  Print the localhost URL and wait for Ctrl+C
 --metadata-timeout <TIME>    Magnet metadata timeout; default 120s
 --stall-timeout <TIME>       Per-read missing-piece timeout; default 120s
+--startup-timeout <TIME>     Total startup-buffer timeout; default 10m
 ```
 
 `--keep` defaults to the user's Videos directory. Without `--keep`, the unique
 session directory and all downloaded data are deleted when VLC exits or the
 session is interrupted. A kept session may be partial if playback was stopped
 before the torrent finished. The cache limit is a hard materialized-piece
-quota; V1 does not evict already downloaded pieces.
+quota; V1 does not evict already downloaded pieces. Startup reads retry
+transient piece stalls until `--startup-timeout` expires, while
+`--stall-timeout` controls each individual read attempt.
 
 The local HTTP server binds to `127.0.0.1` on a random port and includes a
 random per-session URL token. It supports normal requests, `HEAD`, open-ended

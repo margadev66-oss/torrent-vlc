@@ -65,7 +65,15 @@ pub fn select_file(files: &[TorrentFile], selector: Option<&str>) -> Result<Torr
     Ok(files[index - 1].clone())
 }
 
-fn is_playable_path(path: &str) -> bool {
+pub fn select_file_id(files: &[TorrentFile], file_id: usize) -> Result<TorrentFile> {
+    files
+        .iter()
+        .find(|file| file.file_id == file_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("playable file ID {file_id} was not found in the torrent"))
+}
+
+pub fn is_playable_path(path: &str) -> bool {
     Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -178,5 +186,16 @@ mod tests {
             select_file(&files, Some("one.mkv")).unwrap().path,
             "one.mkv"
         );
+    }
+
+    #[test]
+    fn selects_by_raw_file_id() {
+        let mut first = file("one.mkv");
+        first.file_id = 7;
+        let mut second = file("two.mkv");
+        second.file_id = 11;
+        let files = playable_files(&[first, second]);
+        assert_eq!(select_file_id(&files, 11).unwrap().path, "two.mkv");
+        assert!(select_file_id(&files, 8).is_err());
     }
 }

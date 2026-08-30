@@ -6,6 +6,7 @@ use bytes::Bytes;
 use librqbit::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, ManagedTorrent, Session, SessionOptions,
 };
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,6 +29,9 @@ pub struct ResolvedMetadata {
     pub info_hash: String,
     pub torrent_name: String,
     pub layout: TorrentLayout,
+    /// Peers contacted while resolving a magnet. Reuse them when starting the
+    /// actual download instead of forcing a second discovery round.
+    pub initial_peers: Vec<SocketAddr>,
 }
 
 impl TorrentEngine {
@@ -83,6 +87,7 @@ impl TorrentEngine {
             info_hash: response.info_hash.as_string(),
             torrent_name,
             layout,
+            initial_peers: response.seen_peers,
         })
     }
 
@@ -91,6 +96,7 @@ impl TorrentEngine {
         torrent_bytes: Bytes,
         output_folder: &Path,
         file_id: usize,
+        initial_peers: &[SocketAddr],
         cache_limit: Option<u64>,
     ) -> Result<Arc<ManagedTorrent>> {
         let storage_factory = cache_limit
@@ -104,6 +110,7 @@ impl TorrentEngine {
                     only_files: Some(vec![file_id]),
                     output_folder: Some(output_folder.to_string_lossy().into_owned()),
                     overwrite: false,
+                    initial_peers: (!initial_peers.is_empty()).then(|| initial_peers.to_vec()),
                     storage_factory,
                     ..AddTorrentOptions::default()
                 }),
